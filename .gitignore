@@ -1,0 +1,3 @@
+# The PLY is large — track via git-lfs or exclude and upload separately.
+# To include in git normally (5.9 MB is fine for one-off teaser), remove this line:
+# model.ply

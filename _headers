@@ -1,0 +1,5 @@
+# Cloudflare Pages headers
+# Ensures binary PLY is served correctly and cached aggressively
+/model.ply
+  Content-Type: application/octet-stream
+  Cache-Control: public, max-age=31536000, immutable
