@@ -116,7 +116,7 @@
 </header>
 
 <footer>
-  <span class="hint">drag to rotate &nbsp;·&nbsp; scroll to zoom</span>
+  <span class="hint">drag to rotate &nbsp;·&nbsp; scroll to zoom &nbsp;·&nbsp; tap to cycle</span>
 </footer>
 
 <script type="importmap">
@@ -186,35 +186,85 @@ const mat = new THREE.MeshPhysicalMaterial({
 });
 
 // ── Load PLY ──────────────────────────────────────────────────────────
-new PLYLoader().load(
-  'model.ply',
-  (geo) => {
-    if (!geo.attributes.normal) geo.computeVertexNormals();
+// model.ply leads (the original hero); the rest cycle in on tap.
+const MODELS = [
+  'models/model.ply',
+  'models/borgIFS_borgIFS_1024.ply',
+  'models/abox_dmc.ply',
+  'models/spec9_DodecahedronIFS.ply',
+  'models/spec9_mangerHE.ply',
+  'models/day4_sn_check.ply',
+];
 
-    // Center on origin; fractal coords can be arbitrary so normalize them
-    // to a stable size so the camera framing doesn't depend on the export params.
-    geo.computeBoundingBox();
-    const center = new THREE.Vector3();
-    geo.boundingBox.getCenter(center);
-    geo.translate(-center.x, -center.y, -center.z);
+const plyLoader = new PLYLoader();
+let current    = 0;
+let activeMesh = null;
+let loading    = false;
 
-    geo.computeBoundingSphere();
-    const scale = 1.5 / geo.boundingSphere.radius;
+function showLoader() {
+  loader.style.display = 'flex';
+  void loader.offsetWidth;        // force reflow so the fade transition replays
+  loader.classList.remove('fade');
+  pctEl.textContent = 'Loading';
+}
 
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.scale.setScalar(scale);
-    scene.add(mesh);
+function hideLoader() {
+  loader.classList.add('fade');
+  setTimeout(() => { loader.style.display = 'none'; }, 750);
+}
 
-    loader.classList.add('fade');
-    setTimeout(() => { loader.style.display = 'none'; }, 750);
-  },
-  (xhr) => {
-    if (xhr.total > 0) {
-      const pct = Math.round(xhr.loaded / xhr.total * 100);
-      pctEl.textContent = pct < 100 ? `Loading ${pct}%` : 'Building…';
-    }
-  }
-);
+function loadModel(index) {
+  if (loading) return;
+  loading = true;
+  current = (index + MODELS.length) % MODELS.length;
+  showLoader();
+
+  plyLoader.load(
+    MODELS[current],
+    (geo) => {
+      if (!geo.attributes.normal) geo.computeVertexNormals();
+
+      // Center on origin; fractal coords can be arbitrary so normalize them
+      // to a stable size so the camera framing doesn't depend on the export params.
+      geo.computeBoundingBox();
+      const center = new THREE.Vector3();
+      geo.boundingBox.getCenter(center);
+      geo.translate(-center.x, -center.y, -center.z);
+
+      geo.computeBoundingSphere();
+      const scale = 1.5 / geo.boundingSphere.radius;
+
+      if (activeMesh) {
+        scene.remove(activeMesh);
+        activeMesh.geometry.dispose();
+      }
+      activeMesh = new THREE.Mesh(geo, mat);
+      activeMesh.scale.setScalar(scale);
+      scene.add(activeMesh);
+
+      loading = false;
+      hideLoader();
+    },
+    (xhr) => {
+      if (xhr.total > 0) {
+        const pct = Math.round(xhr.loaded / xhr.total * 100);
+        pctEl.textContent = pct < 100 ? `Loading ${pct}%` : 'Building…';
+      }
+    },
+    (err) => { loading = false; hideLoader(); console.error(err); }
+  );
+}
+
+loadModel(0);
+
+// ── Tap / click to cycle ──────────────────────────────────────────────
+// A tap (pointer barely moves) advances to the next model; a drag is left
+// to OrbitControls for rotation. Pointer events cover mouse and touch.
+let downX = 0, downY = 0;
+canvas.addEventListener('pointerdown', (e) => { downX = e.clientX; downY = e.clientY; });
+canvas.addEventListener('pointerup',   (e) => {
+  if (Math.hypot(e.clientX - downX, e.clientY - downY) < 6) loadModel(current + 1);
+});
 
 // ── Render loop ───────────────────────────────────────────────────────
 function resize() {
