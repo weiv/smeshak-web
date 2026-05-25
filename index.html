@@ -132,6 +132,7 @@
 import * as THREE               from 'three';
 import { OrbitControls }        from 'three/addons/controls/OrbitControls.js';
 import { PLYLoader }            from 'three/addons/loaders/PLYLoader.js';
+import { GLTFLoader }           from 'three/addons/loaders/GLTFLoader.js';
 
 const canvas  = document.getElementById('c');
 const loader  = document.getElementById('loader');
@@ -185,21 +186,14 @@ const mat = new THREE.MeshPhysicalMaterial({
   clearcoatRoughness: 0.25,
 });
 
-// ── Load PLY ──────────────────────────────────────────────────────────
-// model.ply leads (the original hero); the rest cycle in on tap.
-const MODELS = [
-  'models/model.ply',
-  'models/borgIFS_borgIFS_1024.ply',
-  'models/abox_dmc.ply',
-  'models/spec9_DodecahedronIFS.ply',
-  'models/spec9_mangerHE.ply',
-  'models/day4_sn_check.ply',
-];
-
-const plyLoader = new PLYLoader();
+// ── Models ────────────────────────────────────────────────────────────
+let MODELS     = [];
 let current    = 0;
 let activeMesh = null;
 let loading    = false;
+
+const plyLoader  = new PLYLoader();
+const gltfLoader = new GLTFLoader();
 
 function showLoader() {
   loader.style.display = 'flex';
@@ -213,49 +207,79 @@ function hideLoader() {
   setTimeout(() => { loader.style.display = 'none'; }, 750);
 }
 
+function swapMesh(object) {
+  if (activeMesh) {
+    scene.remove(activeMesh);
+    activeMesh.traverse(child => { if (child.isMesh) child.geometry?.dispose(); });
+  }
+  activeMesh = object;
+  scene.add(activeMesh);
+  loading = false;
+  hideLoader();
+}
+
+const onProgress = (xhr) => {
+  if (xhr.total > 0) {
+    const pct = Math.round(xhr.loaded / xhr.total * 100);
+    pctEl.textContent = pct < 100 ? `Loading ${pct}%` : 'Building…';
+  }
+};
+
+function loadPLY(path) {
+  plyLoader.load(path, (geo) => {
+    if (!geo.attributes.normal) geo.computeVertexNormals();
+
+    // Center on origin; fractal coords can be arbitrary so normalize them
+    // to a stable size so the camera framing doesn't depend on the export params.
+    geo.computeBoundingBox();
+    const center = new THREE.Vector3();
+    geo.boundingBox.getCenter(center);
+    geo.translate(-center.x, -center.y, -center.z);
+    geo.computeBoundingSphere();
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.scale.setScalar(1.5 / geo.boundingSphere.radius);
+    swapMesh(mesh);
+  }, onProgress, (err) => { loading = false; hideLoader(); console.error(err); });
+}
+
+function loadGLTF(path) {
+  gltfLoader.load(path, (gltf) => {
+    // Apply our material so GLB meshes match the PLY aesthetic.
+    // Remove this traverse if you want to use the GLB's embedded materials instead.
+    gltf.scene.traverse(child => { if (child.isMesh) child.material = mat; });
+
+    // Reset transform, then center and normalize to a fixed radius.
+    gltf.scene.position.set(0, 0, 0);
+    gltf.scene.rotation.set(0, 0, 0);
+    gltf.scene.scale.set(1, 1, 1);
+    const box    = new THREE.Box3().setFromObject(gltf.scene);
+    const center = box.getCenter(new THREE.Vector3());
+    const sphere = new THREE.Sphere();
+    box.getBoundingSphere(sphere);
+    gltf.scene.position.sub(center);
+    gltf.scene.scale.setScalar(1.5 / sphere.radius);
+
+    swapMesh(gltf.scene);
+  }, onProgress, (err) => { loading = false; hideLoader(); console.error(err); });
+}
+
 function loadModel(index) {
-  if (loading) return;
+  if (loading || !MODELS.length) return;
   loading = true;
   current = (index + MODELS.length) % MODELS.length;
   showLoader();
-
-  plyLoader.load(
-    MODELS[current],
-    (geo) => {
-      if (!geo.attributes.normal) geo.computeVertexNormals();
-
-      // Center on origin; fractal coords can be arbitrary so normalize them
-      // to a stable size so the camera framing doesn't depend on the export params.
-      geo.computeBoundingBox();
-      const center = new THREE.Vector3();
-      geo.boundingBox.getCenter(center);
-      geo.translate(-center.x, -center.y, -center.z);
-
-      geo.computeBoundingSphere();
-      const scale = 1.5 / geo.boundingSphere.radius;
-
-      if (activeMesh) {
-        scene.remove(activeMesh);
-        activeMesh.geometry.dispose();
-      }
-      activeMesh = new THREE.Mesh(geo, mat);
-      activeMesh.scale.setScalar(scale);
-      scene.add(activeMesh);
-
-      loading = false;
-      hideLoader();
-    },
-    (xhr) => {
-      if (xhr.total > 0) {
-        const pct = Math.round(xhr.loaded / xhr.total * 100);
-        pctEl.textContent = pct < 100 ? `Loading ${pct}%` : 'Building…';
-      }
-    },
-    (err) => { loading = false; hideLoader(); console.error(err); }
-  );
+  const path = MODELS[current];
+  const ext  = path.split('.').pop().toLowerCase();
+  if (ext === 'glb' || ext === 'gltf') loadGLTF(path);
+  else loadPLY(path);
 }
 
-loadModel(0);
+// Fetch manifest then kick off first load
+fetch('models/manifest.json')
+  .then(r => r.json())
+  .then(list => { MODELS = list; loadModel(0); })
+  .catch(err => console.error('Could not load models/manifest.json', err));
 
 // ── Tap / click to cycle ──────────────────────────────────────────────
 // A tap (pointer barely moves) advances to the next model; a drag is left
